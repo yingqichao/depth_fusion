@@ -14,7 +14,7 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/calib3d.hpp"
 
-#include "omp.h"
+#include "/opt/homebrew/Cellar/libomp/18.1.1/include/omp.h"
 
 //#define DEBUG
 
@@ -109,7 +109,7 @@ void DepthEdgeAlignment::ReadData(const std::string &cameraPath,
         int fileSize = static_cast<int>(fin.tellg());
         fin.seekg (0, fin.beg);
         
-        cerr << "file size " << fileSize << " bytes." << endl;
+        cout << "file size " << fileSize << " bytes." << endl;
         
         CV_Assert(fileSize%16 == 0);
         int nPoints = fileSize / 16; // each point consists of 4 floats (= 4 bytes)
@@ -143,7 +143,7 @@ void DepthEdgeAlignment::ReadData(const std::string &cameraPath,
         CV_Assert(cameraPath.find_last_of("_") != string::npos);
         std::string cameraId = "P" + cameraPath.substr(cameraPath.find_last_of("_") + 1, 1);
         
-        cerr << "cameraId " << cameraId << endl;
+        cout << "cameraId " << cameraId << endl;
         
         auto fillMatrixData = [](cv::Mat m, const std::vector<std::string> &tokens)
         {
@@ -194,13 +194,13 @@ void DepthEdgeAlignment::ReadData(const std::string &cameraPath,
     
     fin.close();
     
-    cerr << projectionMat << endl;
-    cerr << RectifyMat << endl;
-    cerr << lidarToCamera << endl;
+    cout << projectionMat << endl;
+    cout << RectifyMat << endl;
+    cout << lidarToCamera << endl;
     
     cameraToImage = projectionMat * RectifyMat;
     
-    srcCamera = imread(cameraPath + dataId + ".png", CV_LOAD_IMAGE_ANYDEPTH);
+    srcCamera = imread(cameraPath + dataId + ".png", cv::IMREAD_ANYDEPTH);
     
     // small tau -> smoother. higher tau -> more sensitive to small edges
     GetSmoothingWeights(0.1, 2.0);
@@ -659,7 +659,7 @@ cv::Mat DepthEdgeAlignment::FindCalibrationParameters(const cv::Vec6f &calibrati
                 bestCalibParams = newCalibrationParams;
             }
             
-            cerr << "iter " << nIter << " cost " << newCalibrationFidelity << " " << newCalibrationParams[0] << " " << newCalibrationParams[1] << " " << newCalibrationParams[2]/M_PI*180.0
+            cout << "iter " << nIter << " cost " << newCalibrationFidelity << " " << newCalibrationParams[0] << " " << newCalibrationParams[1] << " " << newCalibrationParams[2]/M_PI*180.0
             << "\n" << GetLidarToCamera(newCalibrationParams) << endl;
             
             double costDelta = newCalibrationFidelity - prevCalibrationFidelity;
@@ -668,12 +668,12 @@ cv::Mat DepthEdgeAlignment::FindCalibrationParameters(const cv::Vec6f &calibrati
             double   randomVal = rng.uniform(0.0, 1.0);
  
 #ifdef DEBUG
-            cerr << costDelta << " " << probability << " " << randomVal << endl;
+            cout << costDelta << " " << probability << " " << randomVal << endl;
 #endif
             
             if(costDelta < 0.0 || probability > randomVal)
             {
-                cerr << "updated\n";
+                cout << "updated\n";
                 prevCalibrationParams   = newCalibrationParams;
                 prevCalibrationFidelity = newCalibrationFidelity;
             }
@@ -691,12 +691,12 @@ cv::Mat DepthEdgeAlignment::FindCalibrationParameters(const cv::Vec6f &calibrati
         temperature *= alpha;
     }
         
-    cerr << "best calib params " << bestCalibParams << " min cost " << minFidelity << endl;
+    cout << "best calib params " << bestCalibParams << " min cost " << minFidelity << endl;
     
     cv::Mat bestLidarToCamera = GetLidarToCamera(bestCalibParams);
     
-    cerr << "best LidarToCamera:\n";
-    cerr << bestLidarToCamera << endl;
+    cout << "best LidarToCamera:\n";
+    cout << bestLidarToCamera << endl;
     
     fout.close();
     
@@ -770,46 +770,47 @@ int main(int argc, char ** argv)
     DepthEdgeAlignment edgeAlign;
 
     cv::Mat lidarToCamera; // This is the "true" extrinsic camera matrix
-    
-    edgeAlign.ReadData("image_2/",
-                       "velodyne/",
-                       "calib/",
-                       "001665",//"002893"; // 003969 // 001665
+    string file_name = "002893";
+    edgeAlign.ReadData("/Users/qying/Downloads/depth_fusion/image_2/",
+                       "/Users/qying/Downloads/depth_fusion/velodyne/",
+                       "/Users/qying/Downloads/depth_fusion/calib/",
+                       file_name,//"002893"; // 003969 // 001665
                        lidarToCamera);
 
+    cv::Mat trueRotationVector;
+    Rodrigues(lidarToCamera(cv::Rect(0, 0, 3, 3)), trueRotationVector);
     
+    float trueAngle = sqrt(trueRotationVector.dot(trueRotationVector));
+    trueRotationVector *= (1.0 / trueAngle);
+    
+    cout << "true angle " << trueAngle/M_PI*180.0 << endl;
+    cout << "true rotation vector\n" << trueRotationVector << endl;
+    cout << "true translation\n" << lidarToCamera.at<float>(0, 3) << " " << lidarToCamera.at<float>(1, 3) << " " << lidarToCamera.at<float>(2, 3)  << endl;
+
+    cv::Vec6f neighborDelta = { 0.001, 0.001, toRadian(3.0), 0.01, 0.01, 0.001 };
+    
+    // rot_axis_X, rot_axis_Y, angle, transX, transY, transZ
+    cv::Vec6f initCalibrationParams(trueRotationVector.at<float>(0),
+                                    trueRotationVector.at<float>(1),
+                                    trueAngle,
+                                    lidarToCamera.at<float>(0, 3),
+                                    lidarToCamera.at<float>(1, 3),
+                                    lidarToCamera.at<float>(2, 3));
+    
+    
+    cv::Mat depthMap;
+    cout << "true fidelity " << edgeAlign.DepthFusion(GetLidarToCamera(initCalibrationParams),
+                                                        false, // this disables edge-aware optimization
+                                                        depthMap,
+                                                        -1) << endl;
+    
+
     // Set "reCalibrate" to true if you need to re-calculate calibration data.
     // The extrinsic camera matrix (=lidarToCamera) is updated using simulated-annealing
     bool reCalibrate = false;
 
     if(reCalibrate)
     {
-        cv::Mat trueRotationVector;
-        Rodrigues(lidarToCamera(cv::Rect(0, 0, 3, 3)), trueRotationVector);
-        
-        float trueAngle = sqrt(trueRotationVector.dot(trueRotationVector));
-        trueRotationVector *= (1.0 / trueAngle);
-        
-        cerr << "true angle " << trueAngle/M_PI*180.0 << endl;
-        cerr << "true rotation vector\n" << trueRotationVector << endl;
-        cerr << "true translation\n" << lidarToCamera.at<float>(0, 3) << " " << lidarToCamera.at<float>(1, 3) << " " << lidarToCamera.at<float>(2, 3)  << endl;
-
-        cv::Vec6f neighborDelta = { 0.001, 0.001, toRadian(3.0), 0.01, 0.01, 0.001 };
-        
-        // rot_axis_X, rot_axis_Y, angle, transX, transY, transZ
-        cv::Vec6f initCalibrationParams(trueRotationVector.at<float>(0),
-                                        trueRotationVector.at<float>(1),
-                                        trueAngle,
-                                        lidarToCamera.at<float>(0, 3),
-                                        lidarToCamera.at<float>(1, 3),
-                                        lidarToCamera.at<float>(2, 3));
-        
-        
-        cv::Mat depthMap;
-        cerr << "true fidelity " << edgeAlign.DepthFusion(GetLidarToCamera(initCalibrationParams),
-                                                          false, // this disables edge-aware optimization
-                                                          depthMap,
-                                                          -1) << endl;
         
         // perturb calibration data for test
         cv::RNG rng;
@@ -826,8 +827,8 @@ int main(int argc, char ** argv)
     // edge-aware depth map optimization using "true/updated" calibration data
     cv::Mat edgeAlignedDepth;
     edgeAlign.DepthFusion(lidarToCamera, true, edgeAlignedDepth, 0);
-    
-    imwrite("edgeAlignedDepth.png", ConvertToHeatmap(edgeAlignedDepth, 80.0));
-    
+    string save_path = "/Users/qying/Downloads/depth_fusion/edgeAlignedDepth.png";
+    imwrite(save_path, ConvertToHeatmap(edgeAlignedDepth, 80.0));
+    cout<<"File saved:"<<save_path;
     return 0;
 }
